@@ -48,7 +48,8 @@ The final report is in the docs folder saved as report.pdf
    This will attempt to compile `mdof_degrade_mex.c` (if not found), run simulations for every country/building defined in `countries.m`, and then create `results/project_summary.txt`.
 
 Alternatively, from a system terminal (non-interactive):
-- cd src && matlab -batch "run_simulations"
+- cd dir/to/projectfolder/src
+- matlab -batch "run_simulations"
 
 Notes:
 - If automatic compilation fails, manually compile in MATLAB:

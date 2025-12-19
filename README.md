@@ -84,9 +84,6 @@ Notes:
 - Mathis Olivier Horst
 - Munongo Kazembe Luc-Faustin
 
-## License & citation
-- Add a LICENSE file to define reuse and citation policy. If this is for publication, include a citation string and DOI here.
-
 ## Acknowledgments
 
 Data sources:

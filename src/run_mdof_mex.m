@@ -200,46 +200,54 @@ function run_mdof_mex(building, country, buildingIndex, showPlots)
     %
     % (The existing plotting and summary code continues below; kept intact to preserve behavior.)
     try
-        % stacked displacement plot
-        Umm = u * 1000; % mm
-        max_disp_mm = max(max(abs(Umm)));
-        if max_disp_mm == 0, max_disp_mm = 1e-6; end
-
-        spacing = 1.6 * max_disp_mm;
-        offsets = (0:(n-1))' * spacing;
-
-        stacked = zeros(n, npts);
-        for s = 1:n
-            stacked(s, :) = Umm(s, :) + offsets(s);
+        perPage = 12;
+        pages = ceil(n / perPage);
+        for p = 1:pages
+            first = (p-1)*perPage + 1;
+            last = min(n, p*perPage);
+            nplot = last - first + 1;
+            fig = figure('Visible', ternary(showPlots,'on','off'), 'Position', [100 100 900 1200]);
+            for s = first:last
+                axIdx = s - first + 1;
+                subplot(nplot, 1, axIdx);
+                plot(t, u(s,:) * 1000, 'b-', 'LineWidth', 1.0); grid on;
+                xlabel('Time (s)');
+                ylabel('Disp (mm)');
+                title(sprintf('Story %d', s));
+                [~, idx_peak] = max(abs(u(s,:)));
+                hold on;
+                plot(t(idx_peak), u(s,idx_peak)*1000, 'ro', 'MarkerFaceColor', 'r');
+                plot(t(end), u(s,end)*1000, 'k.', 'MarkerSize', 6);
+                hold off;
+            end
+            sgtitle(sprintf('%s - Building %d (%s) - Floor Displacements (page %d/%d)', building.Name, buildingIndex, country, p, pages),'FontSize',14,'FontWeight','bold');
+            outFile = fullfile(building_dir, sprintf('%s_figure_disp_page%d.png', building.Name, p));
+            try
+                exportgraphics(fig, outFile, 'Resolution', 300);
+            catch
+                saveas(fig, outFile);
+            end
+            close(fig);
         end
-
-        fig = figure('Visible', ternary(showPlots,'on','off'), 'Position', [200 200 1100 650]);
+    catch ME
+        warning('Failed to produce small-multiples displacement pages: %s', ME.message);
+    end
+    try
+        fig = figure('Visible', ternary(showPlots,'on','off'), 'Position', [200 200 1000 600]);
         hold on; grid on;
         for s = 1:n
-            plot(t, stacked(s,:), 'Color', colors(mod(s-1,size(colors,1))+1,:), 'LineWidth', 1);
+            plot(t, deg_hist(s,:), 'LineWidth', 1.2, 'Color', colors(mod(s-1,size(colors,1))+1,:));
         end
-        for s = 1:n
-            [~, idx_peak] = max(abs(u(s,:)));
-            plot(t(idx_peak), Umm(s, idx_peak) + offsets(s), 'ro', 'MarkerFaceColor', 'r');
-            plot(t(end), Umm(s,end) + offsets(s), 'k.', 'MarkerSize', 6);
-        end
-        yticks(offsets);
-        yticklabels(arrayfun(@(s) sprintf('Story %d', s), 1:n, 'UniformOutput', false));
-        xlabel('Time (s)');
-        ylabel('Stacked floor displacements (mm + offset)');
-        title(sprintf('%s - Building %d (%s) - Floor Displacements (stacked)', building.Name, buildingIndex, country));
-        xlim([t(1), t(end)]);
-        hold off;
-
-        outFile = fullfile(building_dir, sprintf('%s_figure_disp_stacked.png', building.Name));
-        try exportgraphics(fig, outFile, 'Resolution', 300); catch saveas(fig, outFile); end
+        xlabel('Time (s)'); ylabel('Degradation index k(t)/k_initial');
+        title(sprintf('%s - Building %d (%s) - Damage Evolution', building.Name, buildingIndex, country));
+        legend(arrayfun(@(x) sprintf('Story %d', x), 1:n, 'UniformOutput', false), 'Location', 'bestoutside');
+        outFile = fullfile(building_dir, sprintf('%s_degradation_index.png', building.Name));
+        try exportgraphics(fig, outFile, 'Resolution', 300); catch, saveas(fig, outFile); end
         close(fig);
     catch ME
-        warning('Failed to produce stacked displacement plot: %s', ME.message);
+        warning('Failed to produce degradation plot: %s', ME.message)
     end
-
-    % (other plotting blocks omitted here for brevity since they are unchanged)
-    % ---------------- Write summary (unchanged content, uses perFloorStiffRed_pct/stiffness_reduction) ----------------
+    % ---------------- summary ----------------
     try
         summary_filename = fullfile(building_dir, sprintf('%s_building%d_summary.txt', building.Name, buildingIndex));
         fid = fopen(summary_filename,'w');

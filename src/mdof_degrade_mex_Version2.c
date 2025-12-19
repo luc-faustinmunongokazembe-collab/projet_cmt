@@ -1,12 +1,14 @@
-/* mdof_degrade_mex.c  (corrected single-definition version)
- * Implements progressive-degradation MDOF solver:
- * - One-pass Newmark (beta=1/4, gamma=1/2 passed in)
- * - Rayleigh damping matrix C is constant and passed in
- * - Stiffness degrades based on instantaneous drift (damage permanent)
- * - Peak plastic drift tracked
+/* mdof_degrade_mex.c
+ * Progressive-degradation MDOF solver used as a MATLAB MEX entry point.
+ *
+ * Implementation notes:
+ * - Newmark one-pass integration with user-supplied beta/gamma
+ * - Rayleigh damping matrix C is provided
+ * - Stiffness is degraded permanently based on instantaneous drift
+ * - Peak plastic drift per story is tracked
  *
  * MATLAB signature:
- * [u,ud,udd,story_drifts,stiffness_history,deg_hist,plastic_hist,max_drift_ratio,yielded] = ...
+ * [u,ud,udd,story_drifts,stiffness_history,deg_hist,plastic_hist,max_drift_ratio,yielded] =
  *   mdof_degrade_mex(M, C, k_elastic, story_heights, ag, dt, beta, gamma, ...
  *                    yield_drift, ultimate_drift, residual_strength, degradation_rate)
  */
@@ -15,13 +17,11 @@
 #include <math.h>
 #include <string.h>
 
-/* ---------------- helper: build shear building stiffness K from story k ---------------- */
+/* Build shear stiffness matrix for an n-story shear building from story k values */
 static void build_shear_stiffness(const double *k_cur, int n, double *K)
 {
     int i;
-    /* zero */
     for (i = 0; i < n*n; ++i) K[i] = 0.0;
-    /* assemble */
     for (i = 0; i < n; ++i) {
         K[i + i*n] += k_cur[i];
         if (i > 0) {
@@ -32,12 +32,11 @@ static void build_shear_stiffness(const double *k_cur, int n, double *K)
     }
 }
 
-/* ---------------- helper: small Ax=b solver with partial pivoting ---------------- */
+/* Small dense linear solver (Gaussian elimination with partial pivoting) */
 static int solve_linear(double *A, double *b, int n)
 {
     int i, j, k, piv;
     for (k = 0; k < n-1; ++k) {
-        /* pivot on column k */
         piv = k;
         double maxabs = fabs(A[k + k*n]);
         for (i = k+1; i < n; ++i) {
@@ -46,7 +45,6 @@ static int solve_linear(double *A, double *b, int n)
         }
         if (maxabs < 1e-20) return 1; /* singular */
 
-        /* swap rows k <-> piv */
         if (piv != k) {
             for (j = k; j < n; ++j) {
                 double tmp = A[k + j*n]; A[k + j*n] = A[piv + j*n]; A[piv + j*n] = tmp;
@@ -54,7 +52,6 @@ static int solve_linear(double *A, double *b, int n)
             double tb = b[k]; b[k] = b[piv]; b[piv] = tb;
         }
 
-        /* eliminate below */
         {
             double akk = A[k + k*n];
             for (i = k+1; i < n; ++i) {
@@ -66,7 +63,6 @@ static int solve_linear(double *A, double *b, int n)
             }
         }
     }
-    /* back substitution */
     for (i = n-1; i >= 0; --i) {
         double sum = b[i];
         for (j = i+1; j < n; ++j) sum -= A[i + j*n] * b[j];
@@ -77,7 +73,7 @@ static int solve_linear(double *A, double *b, int n)
     return 0;
 }
 
-/* ---------------- helper: compute story drifts from floor displacements ---------------- */
+/* Compute story drifts from floor displacements */
 static void compute_drifts(const double *u, const double *h, int n, double *dr)
 {
     int j;
@@ -86,15 +82,12 @@ static void compute_drifts(const double *u, const double *h, int n, double *dr)
         dr[j] = (u[j] - u[j-1]) / h[j];
 }
 
-/* --------------------- gateway --------------------- */
 void mexFunction(int nlhs, mxArray *plhs[],
                  int nrhs, const mxArray *prhs[])
 {
-    /* ---- check I/O ---- */
     if (nrhs != 12) mexErrMsgTxt("Expected 12 inputs.");
     if (nlhs != 9)  mexErrMsgTxt("Expected 9 outputs.");
 
-    /* inputs */
     const mxArray *M_in    = prhs[0];
     const mxArray *C_in    = prhs[1];
     const mxArray *kel_in  = prhs[2];
@@ -124,7 +117,6 @@ void mexFunction(int nlhs, mxArray *plhs[],
     const double *h   = mxGetPr(h_in);
     const double *agp = mxGetPr(ag_in);
 
-    /* Newmark constants */
     double a0_nm = 1.0/(beta*dt*dt);
     double a1_nm = gamma/(beta*dt);
     double a2    = 1.0/(beta*dt);
@@ -132,7 +124,6 @@ void mexFunction(int nlhs, mxArray *plhs[],
     double a4    = gamma/beta - 1.0;
     double a5    = dt*(gamma/(2.0*beta) - 1.0);
 
-    /* outputs */
     plhs[0] = mxCreateDoubleMatrix(n, nt, mxREAL); double *u   = mxGetPr(plhs[0]);
     plhs[1] = mxCreateDoubleMatrix(n, nt, mxREAL); double *ud  = mxGetPr(plhs[1]);
     plhs[2] = mxCreateDoubleMatrix(n, nt, mxREAL); double *udd = mxGetPr(plhs[2]);
@@ -145,7 +136,6 @@ void mexFunction(int nlhs, mxArray *plhs[],
 
     plhs[8] = mxCreateDoubleMatrix(n, 1,  mxREAL); double *yielded_out    = mxGetPr(plhs[8]);
 
-    /* work arrays */
     double *k_cur = (double*)mxCalloc(n,   sizeof(double));
     double *deg_f = (double*)mxCalloc(n,   sizeof(double));
     double *plast = (double*)mxCalloc(n,   sizeof(double));
@@ -156,7 +146,6 @@ void mexFunction(int nlhs, mxArray *plhs[],
     double *Keff  = (double*)mxCalloc(n*n, sizeof(double));
     double *rhs   = (double*)mxCalloc(n,   sizeof(double));
 
-    /* initialize */
     int i, j;
     for (j = 0; j < n; ++j) {
         k_cur[j]       = kel[j];
@@ -164,7 +153,6 @@ void mexFunction(int nlhs, mxArray *plhs[],
         plast[j]       = 0.0;
         yielded_out[j] = 0.0;
     }
-    /* histories at col 0; u/ud/udd already zero */
     for (j = 0; j < n; ++j) {
         stiffness_hist[j + 0*n] = kel[j];
         deg_hist[j + 0*n]       = 1.0;
@@ -173,45 +161,34 @@ void mexFunction(int nlhs, mxArray *plhs[],
         story_drifts[j + 0*n]   = 0.0;
     }
 
-    /* time stepping */
     for (i = 0; i < nt-1; ++i) {
         const double *u_i   = u  + i*n;
         const double *ud_i  = ud + i*n;
         const double *udd_i = udd + i*n;
 
-        /* 1) update stiffness from instantaneous drifts of u(:,i) */
         compute_drifts(u_i, h, n, dr);
         for (j = 0; j < n; ++j) {
             double abs_d = dr[j] >= 0.0 ? dr[j] : -dr[j];
             if (abs_d > yield_drift) {
                 yielded_out[j] = 1.0;
-
-                /* --- track peak plastic drift --- */
                 double incr = abs_d - yield_drift; if (incr < 0.0) incr = 0.0;
                 if (incr > plast[j]) plast[j] = incr;
-
-                /* --- exponential degradation --- */
                 double ratio = abs_d / ultimate_drift; if (ratio > 1.0) ratio = 1.0;
                 double g = exp(- degradation_rate * ratio * ratio);
                 if (g < residual_strength) g = residual_strength;
-
-                /* --- permanent damage --- */
                 deg_f[j] = fmin(g, deg_f[j]);
                 k_cur[j] = kel[j] * deg_f[j];
             } else {
-                k_cur[j] = kel[j] * deg_f[j]; /* keep previous degraded stiffness */
+                k_cur[j] = kel[j] * deg_f[j];
             }
         }
 
-        /* 2) assemble tangent and Keff */
         build_shear_stiffness(k_cur, n, Kcur);
 
-        /* Keff = Kcur + a0*M + a1*C */
         for (j = 0; j < n*n; ++j) Keff[j] = Kcur[j];
         for (j = 0; j < n;   ++j) Keff[j + j*n] += a0_nm * M[j + j*n];
         for (j = 0; j < n*n; ++j) Keff[j] += a1_nm * C[j];
 
-        /* 3) effective load */
         {
             double ag_next = agp[i+1];
             for (j = 0; j < n; ++j)
@@ -226,7 +203,6 @@ void mexFunction(int nlhs, mxArray *plhs[],
             Peff[j] = Ft[j] + Mu + Cu;
         }
 
-        /* 4) solve Keff * u(:,i+1) = Peff */
         for (j = 0; j < n; ++j) rhs[j] = Peff[j];
         {
             double *A = (double*)mxCalloc(n*n, sizeof(double));
@@ -238,13 +214,11 @@ void mexFunction(int nlhs, mxArray *plhs[],
             mxFree(A);
         }
 
-        /* write u(:,i+1) */
         {
             double *u_ip1 = u + (i+1)*n;
             for (j = 0; j < n; ++j) u_ip1[j] = rhs[j];
         }
 
-        /* 5) velocities & accelerations at i+1 (Newmark) */
         {
             const double *u_ip1 = u + (i+1)*n;
             double *ud_ip1  = ud  + (i+1)*n;
@@ -255,23 +229,19 @@ void mexFunction(int nlhs, mxArray *plhs[],
             }
         }
 
-        /* 6) store histories at i+1 */
         for (j = 0; j < n; ++j) {
             story_drifts[j + (i+1)*n]   = dr[j];
             stiffness_hist[j + (i+1)*n] = k_cur[j];
             deg_hist[j + (i+1)*n]       = deg_f[j];
             plastic_hist[j + (i+1)*n]   = plast[j];
-
-            /* max drift envelope */
             {
                 double prev = maxdr_hist[j + i*n];
                 double cur  = dr[j]; if (cur < 0.0) cur = -cur;
                 maxdr_hist[j + (i+1)*n] = (prev > cur) ? prev : cur;
             }
         }
-    } /* end time loop */
+    }
 
-    /* free */
     mxFree(k_cur);
     mxFree(deg_f);
     mxFree(plast);

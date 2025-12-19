@@ -1,13 +1,11 @@
 function create_project_summary(projectRoot)
-%CREATE_PROJECT_SUMMARY Compact tabular project-level summary (building-level)
-% Patched: prefers explicit perFloorStiffRed_pct saved in MAT; selects newest MAT
-% per building; computes MaxDisp and average stiffness reduction robustly.
-%
-% Writes <projectRoot>/results/project_summary.txt with columns:
+% CREATE_PROJECT_SUMMARY Create a compact tabular project summary for all buildings.
+% Writes results/project_summary.txt with per-building rows:
 % Country | Building | Stories | MaxDisp (mm) | StiffRed (%) | State
 %
-% Usage:
-%   create_project_summary(projectRoot)
+% The routine prefers explicit per-floor stiffness-reduction arrays saved
+% in the individual MAT files; if those are not present it falls back to
+% reasonable alternatives and remains silent on missing/partial data.
 
     if nargin < 1 || isempty(projectRoot)
         projectRoot = pwd();
@@ -20,7 +18,7 @@ function create_project_summary(projectRoot)
         error('Results folder not found: %s. Run simulations first.', resultsRoot);
     end
 
-    % Find an AT2 (prefer earthquake_data.AT2)
+    % Try to find an AT2 file (best-effort, prefer earthquake_data.AT2)
     at2Path = '';
     if exist(dataDir,'dir')
         pref = 'earthquake_data.AT2';
@@ -44,7 +42,7 @@ function create_project_summary(projectRoot)
             [ag_g, dt, npts] = readAT2(at2Path);
             at2_dt = dt; at2_npts = npts; at2_PGA_g = max(abs(ag_g));
         catch
-            % leave NaNs
+            % keep NaNs on failure, but do not produce console warnings
         end
     end
 
@@ -63,7 +61,7 @@ function create_project_summary(projectRoot)
         fprintf(fid, 'AT2=NONE\n\n');
     end
 
-    % Table columns
+    % Table column widths
     wCountry = 15;
     wBuilding = 20;
     wStories = 6;
@@ -71,14 +69,13 @@ function create_project_summary(projectRoot)
     wStiff = 12;
     wState = 12;
 
-    % Header row
     fprintf(fid, '%-*s %-*s %-*s %-*s %-*s %-*s\n', ...
         wCountry, 'Country', wBuilding, 'Building', wStories, 'Stories', ...
         wMaxDisp, 'MaxDisp (mm)', wStiff, 'StiffRed (%)', wState, 'State');
     totalWidth = wCountry + 1 + wBuilding + 1 + wStories + 1 + wMaxDisp + 1 + wStiff + 1 + wState;
     fprintf(fid, '%s\n', repmat('-', 1, totalWidth));
 
-    % Iterate countries and buildings
+    % Iterate through results folders
     countryDirs = dir(resultsRoot);
     countryDirs = countryDirs([countryDirs.isdir] & ~ismember({countryDirs.name},{'.','..'}));
     for ci = 1:numel(countryDirs)
@@ -91,20 +88,18 @@ function create_project_summary(projectRoot)
             bname = buildingDirs(bi).name;
             bdir = fullfile(countryPath, bname);
 
-            % find newest mat file in building folder
+            % Find newest mat file for the building
             matFiles = dir(fullfile(bdir, '*_mdof_results_building*.mat'));
             if isempty(matFiles)
-                % fallback: try any mat in folder
                 matFiles = dir(fullfile(bdir, '*.mat'));
             end
             matFull = '';
             if ~isempty(matFiles)
-                % pick newest (most recent datenum)
                 [~, idxNewest] = max([matFiles.datenum]);
                 matFull = fullfile(matFiles(idxNewest).folder, matFiles(idxNewest).name);
             end
 
-            % defaults
+            % Default metrics
             maxDisp_mm_overall = NaN;
             avg_stiff_red_pct = NaN;
             stateLabel = 'NoData';
@@ -116,19 +111,18 @@ function create_project_summary(projectRoot)
 
                     % Displacement metrics
                     if isfield(S,'u')
-                        u = S.u; % n x nt
+                        u = S.u;
                         nStories = size(u,1);
-                        maxDisp_mm = max(abs(u),[],2) * 1000; % per floor
+                        maxDisp_mm = max(abs(u),[],2) * 1000;
                         maxDisp_mm_overall = max(maxDisp_mm);
                     end
 
-                    % Prefer explicit per-floor stiffness reductions if present
+                    % Prefer explicit per-floor stiffness reductions
                     perFloorStiffRed_pct = [];
                     if isfield(S,'perFloorStiffRed_pct') && ~isempty(S.perFloorStiffRed_pct)
                         perFloorStiffRed_pct = S.perFloorStiffRed_pct(:);
                         avg_stiff_red_pct = mean(perFloorStiffRed_pct,'omitnan');
                     else
-                        % try compute from final_stiffness and explicit k_elastic (if saved)
                         if isfield(S,'final_stiffness') && isfield(S,'k_elastic')
                             final_k = S.final_stiffness(:);
                             k_el = S.k_elastic(:);
@@ -137,7 +131,6 @@ function create_project_summary(projectRoot)
                                 avg_stiff_red_pct = mean(perFloorStiffRed_pct,'omitnan');
                             end
                         else
-                            % try to extract from Building object if present
                             if isfield(S,'final_stiffness') && isfield(S,'building')
                                 final_k = S.final_stiffness(:);
                                 k_el = [];
@@ -159,7 +152,7 @@ function create_project_summary(projectRoot)
                         end
                     end
 
-                    % Determine compact state using most reliable info available
+                    % Determine compact state using available info
                     max_drift = NaN; yield_drift = NaN;
                     if isfield(S,'max_drift_per_story')
                         max_drift = max(S.max_drift_per_story(:));
@@ -179,8 +172,8 @@ function create_project_summary(projectRoot)
                         end
                     end
 
+                    % State decision tree
                     if ~isempty(perFloorStiffRed_pct)
-                        % prefer per-floor k_ratio logic
                         k_ratio = 1 - perFloorStiffRed_pct/100;
                         if any(k_ratio < 0.10)
                             stateLabel = 'Collapse';
@@ -209,12 +202,12 @@ function create_project_summary(projectRoot)
                         stateLabel = 'NoData';
                     end
 
-                catch ME
-                    warning('Could not load/parse MAT %s: %s', matFull, ME.message);
+                catch
+                    % if parsing/loading fails, keep NoData silently
                     stateLabel = 'NoData';
                 end
             else
-                % try to parse summary text as last resort
+                % try summary text as last resort, but stay silent
                 txtFiles = dir(fullfile(bdir, '*_summary.txt'));
                 if ~isempty(txtFiles)
                     try
@@ -236,7 +229,6 @@ function create_project_summary(projectRoot)
                 end
             end
 
-            % Prepare printable values
             if isnan(maxDisp_mm_overall)
                 maxDispStr = 'NA';
             else
@@ -253,7 +245,6 @@ function create_project_summary(projectRoot)
                 nStoriesStr = sprintf('%d', nStories);
             end
 
-            % write table row
             countrySafe = strrep(countryName, ',', ';');
             bnameSafe = strrep(bname, ',', ';');
             fprintf(fid, '%-*s %-*s %-*s %-*s %-*s %-*s\n', ...
@@ -268,18 +259,8 @@ function create_project_summary(projectRoot)
 
     fclose(fid);
 
-    % open in editor (single popup)
-    try
-        edit(outPath);
-    catch
-        try
-            type(outPath);
-        catch
-            fprintf('Wrote compact project summary to %s\n', outPath);
-        end
-    end
+    % Do not open the file automatically; it has been written to disk.
 
-    % --- nested helper (string truncation) ---
     function s = trunc(str, maxlen)
         if isempty(str)
             s = 'NA';

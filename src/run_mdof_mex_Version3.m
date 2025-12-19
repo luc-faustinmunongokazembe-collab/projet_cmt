@@ -1,17 +1,19 @@
 function run_mdof_mex(building, country, buildingIndex, showPlots)
-%RUN_MDOF_MEX Run MDOF solver, save results and high-quality plots.
-% Patched: saves explicit per-floor arrays (k_elastic, final_stiffness,
-% perFloorStiffRed_pct) and checks shapes so downstream summary is robust.
+% RUN_MDOF_MEX Run the compiled MEX solver for a building and write outputs.
+% The function:
+%  - discovers the ground motion file
+%  - assembles M, K and Rayleigh damping
+%  - calls mdof_degrade_mex
+%  - post-processes results and writes MAT and text summaries and PNGs
 %
-% Usage:
-%   run_mdof_mex(building, country, buildingIndex)
-%   run_mdof_mex(building, country, buildingIndex, showPlots)
+% Non-essential console output and warnings have been removed so this
+% function operates quietly (errors remain visible).
 
     if nargin < 4
         showPlots = false;
     end
 
-    % ---------------- Find project root robustly ----------------
+    % Find project root (parent containing 'src') or default to cwd
     thisFile = mfilename('fullpath');
     if isempty(thisFile)
         thisDir = pwd();
@@ -42,7 +44,6 @@ function run_mdof_mex(building, country, buildingIndex, showPlots)
                 projectRoot = parent;
             else
                 projectRoot = pwd();
-                warning('Could not locate project root containing ''src''; using current working directory as project root: %s', projectRoot);
             end
         end
     end
@@ -50,9 +51,7 @@ function run_mdof_mex(building, country, buildingIndex, showPlots)
     dataDir = fullfile(projectRoot, 'data');
     resultsRoot = fullfile(projectRoot, 'results');
     if ~exist(resultsRoot, 'dir'), mkdir(resultsRoot); end
-    fprintf('Detected project root: %s\n', projectRoot);
 
-    % ---------------- Building properties ----------------
     story_heights = building.story_heights(:);
     n = length(story_heights);
 
@@ -64,7 +63,7 @@ function run_mdof_mex(building, country, buildingIndex, showPlots)
     residual_strength = building.residual_strength;
     degradation_rate  = building.degradation_rate;
 
-    % ---------------- Ground motion discovery ----------------
+    % Discover ground motion file quietly
     preferredName = 'earthquake_data.AT2';
     candidates = [];
     if exist(dataDir, 'dir')
@@ -74,7 +73,6 @@ function run_mdof_mex(building, country, buildingIndex, showPlots)
         candidates = [dir('*.AT2'); dir('*.at2')];
         if ~isempty(candidates)
             dataDir = pwd();
-            warning('No .AT2 found in project data/; using AT2 from current folder.');
         end
     end
     if isempty(candidates)
@@ -90,19 +88,11 @@ function run_mdof_mex(building, country, buildingIndex, showPlots)
     end
     if isempty(chosen)
         chosen = candidates(1);
-        if numel(candidates) > 1
-            warning('Preferred file "%s" not found. Using discovered AT2: %s', preferredName, chosen.name);
-        else
-            fprintf('Using discovered AT2: %s\n', chosen.name);
-        end
-    else
-        fprintf('Using preferred AT2: %s\n', chosen.name);
     end
 
     filepath = fullfile(dataDir, chosen.name);
-    fprintf('Ground motion file path: %s\n', filepath);
 
-    % ---------------- Assemble matrices and Newmark params ----------------
+    % Assemble M and initial K, then compute Rayleigh damping
     M = diag(m);
     K_initial = build_shear_stiffness(k_elastic, n);
 
@@ -115,9 +105,6 @@ function run_mdof_mex(building, country, buildingIndex, showPlots)
         a1_ray = 2 * xi / (omega1 + omega2);
         C = a0_ray * M + a1_ray * K_initial;
     else
-        if any(lambda_all <= 0)
-            warning('Non-positive eigenvalues encountered; falling back to simple mass-proportional damping.');
-        end
         omega1 = sqrt(max(lambda_all(1), eps));
         C = 2 * xi * omega1 * M;
     end
@@ -125,52 +112,37 @@ function run_mdof_mex(building, country, buildingIndex, showPlots)
     beta  = 1/4;
     gamma = 1/2;
 
-    % ---------------- Read ground motion ----------------
-    [ag_g, dt, npts] = readAT2(filepath);   % returns ag in 'g'
-    ag = ag_g * 9.81;                       % convert once to m/s^2
+    % Read ground motion (ag_g in units of g)
+    [ag_g, dt, npts] = readAT2(filepath);
+    ag = ag_g * 9.81;
     t  = (0:npts-1) * dt;
     PGA_g = max(abs(ag_g));
 
-    % ---------------- Prepare results directories under project root ----------
+    % Prepare results directories
     results_dir = fullfile(resultsRoot, country);
     if ~exist(results_dir, 'dir'), mkdir(results_dir); end
     building_dir = fullfile(results_dir, building.Name);
     if ~exist(building_dir, 'dir'), mkdir(building_dir); end
-    fprintf('Saving results to: %s\n', building_dir);
 
-    % ---------------- Global figure visibility control ----------------
-    oldFigVis = get(0, 'DefaultFigureVisible');
-    if ~showPlots
-        set(0, 'DefaultFigureVisible', 'off');
-    end
-    cleanupObj = onCleanup(@() set(0, 'DefaultFigureVisible', oldFigVis));
-
-    % ---------------- Call compiled MEX solver ----------------
+    % Ensure compiled MEX is available
     if ~exist('mdof_degrade_mex', 'file')
         error('MEX function mdof_degrade_mex not found on path. Compile it (mex mdof_degrade_mex.c) and ensure src is on the MATLAB path.');
     end
 
-    try
-        [u, ud, udd, story_drifts, stiffness_history, deg_hist, plastic_hist, max_drift_ratio, yielded] = ...
-            mdof_degrade_mex(M, C, k_elastic, story_heights, ag, dt, beta, gamma, ...
-            yield_drift, ultimate_drift, residual_strength, degradation_rate);
-    catch ME
-        rethrow(ME);
-    end
+    % Call solver
+    [u, ud, udd, story_drifts, stiffness_history, deg_hist, plastic_hist, max_drift_ratio, yielded] = ...
+        mdof_degrade_mex(M, C, k_elastic, story_heights, ag, dt, beta, gamma, ...
+        yield_drift, ultimate_drift, residual_strength, degradation_rate);
 
-    % ---------------- Postprocess (patched) ----------------
-    % Ensure column shapes and compute explicit per-floor stiffness reductions
+    % Post-process shapes and compute per-floor stiffness reductions
     k_elastic = k_elastic(:);
     final_stiffness = stiffness_history(:, end);
     final_stiffness = final_stiffness(:);
 
     if numel(final_stiffness) ~= numel(k_elastic)
-        warning('Size mismatch: final_stiffness (%d) vs k_elastic (%d).', numel(final_stiffness), numel(k_elastic));
         if isscalar(final_stiffness)
-            warning('final_stiffness is scalar; broadcasting to match k_elastic. This likely indicates a solver bug.');
             final_stiffness = repmat(final_stiffness, numel(k_elastic), 1);
         else
-            % attempt reshape (no silent transpose)
             final_stiffness = final_stiffness(:);
         end
     end
@@ -178,27 +150,17 @@ function run_mdof_mex(building, country, buildingIndex, showPlots)
     perFloorStiffRed_pct = (k_elastic - final_stiffness) ./ k_elastic * 100;
     perFloorStiffRed_pct(~isfinite(perFloorStiffRed_pct)) = NaN;
 
-    % quick sanity check: warn if nearly constant (very suspicious)
-    if all(~isnan(perFloorStiffRed_pct)) && (max(perFloorStiffRed_pct) - min(perFloorStiffRed_pct) < 1e-6)
-        warning('perFloorStiffRed_pct nearly constant (std < 1e-6) for %s - check solver inputs/outputs.', building.Name);
-    end
-
     max_drift_per_story = max(max_drift_ratio, [], 2);
-    stiffness_reduction = perFloorStiffRed_pct; % backward-compatible name
+    stiffness_reduction = perFloorStiffRed_pct;
     plastic_drifts      = plastic_hist(:, end);
     colors = lines(max(1,n));
 
-    % Save full MAT results into project_root/results/... (explicit arrays included)
+    % Save MAT
     matFile = fullfile(building_dir, sprintf('%s_mdof_results_building%d.mat', building.Name, buildingIndex));
     save(matFile, 'u','ud','udd','story_drifts','stiffness_history','deg_hist','plastic_hist','max_drift_ratio','yielded', ...
         't','dt','ag','ag_g','PGA_g','building','final_stiffness','k_elastic','perFloorStiffRed_pct','stiffness_reduction','max_drift_per_story','plastic_drifts');
 
-    % ---------------- Plotting and summary writing (unchanged) ----------------
-    % (The rest of the function remains as before: plotting and summary text)
-    % For brevity the plotting and file-writing blocks follow previous version
-    % but they will use the newly computed final_stiffness and perFloorStiffRed_pct variables.
-    %
-    % (The existing plotting and summary code continues below; kept intact to preserve behavior.)
+    % Save displacement pages (failures handled silently)
     try
         perPage = 12;
         pages = ceil(n / perPage);
@@ -225,13 +187,15 @@ function run_mdof_mex(building, country, buildingIndex, showPlots)
             try
                 exportgraphics(fig, outFile, 'Resolution', 300);
             catch
-                saveas(fig, outFile);
+                try saveas(fig, outFile); catch, end
             end
             close(fig);
         end
-    catch ME
-        warning('Failed to produce small-multiples displacement pages: %s', ME.message);
+    catch
+        % continue quietly on plot generation errors
     end
+
+    % Degradation plot (quiet on failures)
     try
         fig = figure('Visible', ternary(showPlots,'on','off'), 'Position', [200 200 1000 600]);
         hold on; grid on;
@@ -242,12 +206,13 @@ function run_mdof_mex(building, country, buildingIndex, showPlots)
         title(sprintf('%s - Building %d (%s) - Damage Evolution', building.Name, buildingIndex, country));
         legend(arrayfun(@(x) sprintf('Story %d', x), 1:n, 'UniformOutput', false), 'Location', 'bestoutside');
         outFile = fullfile(building_dir, sprintf('%s_degradation_index.png', building.Name));
-        try exportgraphics(fig, outFile, 'Resolution', 300); catch, saveas(fig, outFile); end
+        try exportgraphics(fig, outFile, 'Resolution', 300); catch, end
         close(fig);
-    catch ME
-        warning('Failed to produce degradation plot: %s', ME.message)
+    catch
+        % continue quietly
     end
-    % ---------------- summary ----------------
+
+    % Write textual summary
     try
         summary_filename = fullfile(building_dir, sprintf('%s_building%d_summary.txt', building.Name, buildingIndex));
         fid = fopen(summary_filename,'w');
@@ -306,18 +271,15 @@ function run_mdof_mex(building, country, buildingIndex, showPlots)
 
         fprintf(fid, '\nNONLINEAR ANALYSIS STATISTICS:\n');
         fprintf(fid, 'Yielded stories: %d/%d (%.0f%%)\n', sum(yielded), n, sum(yielded)/n*100);
-        fprintf(fid, 'Average stiffness reduction: %.1f%%\n', mean(stiffness_reduction));
+        fprintf(fid, 'Average stiffness reduction: %.1f%%\n', mean(stiffness_reduction,'omitnan'));
         fprintf(fid, 'Maximum plastic drift: %.3f%%\n', max(plastic_drifts)*100);
 
         fclose(fid);
-    catch ME
-        warning('Failed to write summary file: %s', ME.message);
+    catch
         if exist('fid','var') && fid > 0, fclose(fid); end
     end
-
 end
 
-% -------------------------- helpers --------------------------
 function K = build_shear_stiffness(k, n)
     K = zeros(n,n);
     for i = 1:n

@@ -1,28 +1,18 @@
 function k = get_k(thickness, E, height, wall_width)
-%GET_K Computes lateral stiffness for each floor
-%
-% INPUTS (all vectors of same length n_floors):
-%   thickness   : wall thickness per floor [m]
-%   E           : Young's modulus per floor [Pa]
-%   height      : floor height per floor [m]
-%   wall_width  : wall width per floor [m]
-%
-% OUTPUT:
-%   k           : floor stiffness vector [N/m]
+% GET_K Compute lateral (shear) stiffness for each story.
+% Inputs must be vectors of the same length (thickness, E, height, wall_width).
+% Floors with NaN thickness are treated as non-existing and are removed.
 
-    % ensure column vectors
     thickness   = thickness(:);
     E           = E(:);
     height      = height(:);
     wall_width  = wall_width(:);
 
-    % check consistency
     n = length(thickness);
     if any([length(E), length(height), length(wall_width)] ~= n)
         error('All input vectors must have the same length.');
     end
 
-    % remove non-existing floors (NaN thickness)
     valid = ~isnan(thickness);
 
     thickness   = thickness(valid);
@@ -30,9 +20,9 @@ function k = get_k(thickness, E, height, wall_width)
     height      = height(valid);
     wall_width  = wall_width(valid);
 
-    % second moment of area
+    % Second moment of area for wall element (approximate)
     I = wall_width .* thickness.^3 / 12;
 
-    % lateral stiffness per floor
+    % Shear-based lateral stiffness for each floor (two walls assumed)
     k = 2 .* (12 .* E .* I ./ height.^3);
 end

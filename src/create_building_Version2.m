@@ -1,39 +1,19 @@
 function building = create_building(name, story_heights, wall_thickness, density, E, geom, nonlinear)
-%CREATE_BUILDING Creates a Building object from geometry and material data
+% CREATE_BUILDING Build a Building object from simple geometry and material data.
+% The function:
+%  - validates inputs
+%  - removes floors with NaN thickness (treated as missing)
+%  - expands scalar inputs to vectors
+%  - computes per-floor mass and stiffness using get_m and get_k
+%  - returns a Building instance
 %
-% USAGE:
-%   building = create_building(name, story_heights, wall_thickness, density, E, geom, nonlinear)
-%
-% INPUTS:
-%   name            : building name (string or char)
-%   story_heights   : floor heights [m] (vector)
-%   wall_thickness  : wall thickness per floor [m] (vector, NaN allowed -> floor ignored)
-%   density         : material density [kg/m^3] (scalar or vector)
-%   E               : Young's modulus [Pa] (scalar or vector)
-%   geom (struct)   : geometry parameters; required fields:
-%       .wall_width
-%       .slab_thickness
-%       .internal_fraction
-%     optional fields:
-%       .floor_area
-%       .perimeter
-%   nonlinear (struct) with fields:
-%       .yield_drift, .ultimate_drift, .residual_strength, .degradation_rate
-%
-% OUTPUT:
-%   building        : Building object
-%
-% NOTES:
-% - Floors with wall_thickness == NaN are treated as non-existing and removed
-%   consistently before any derived quantities are computed.
-% - All inputs are expected in SI units.
+% All quantities are SI. Nonlinear must contain fields:
+%   yield_drift, ultimate_drift, residual_strength, degradation_rate
 
-    % --- basic input sanitizing ---
     if nargin < 1 || isempty(name)
         name = "Building";
     end
 
-    % ensure column vectors
     story_heights  = story_heights(:);
     wall_thickness = wall_thickness(:);
 
@@ -43,7 +23,6 @@ function building = create_building(name, story_heights, wall_thickness, density
 
     n_orig = length(story_heights);
 
-    % expand scalar material props to vectors
     if isscalar(density), density = density * ones(n_orig,1); end
     if isscalar(E),       E       = E       * ones(n_orig,1); end
     density = density(:);
@@ -53,7 +32,7 @@ function building = create_building(name, story_heights, wall_thickness, density
         error('density and E must be scalar or vectors of same length as story_heights.');
     end
 
-    % --- remove non-existing floors (NaN wall_thickness) up-front ---
+    % Remove floors with NaN thickness (treated as non-existent)
     valid = ~isnan(wall_thickness);
     if ~any(valid)
         error('All floors have NaN wall_thickness; nothing to build.');
@@ -66,7 +45,7 @@ function building = create_building(name, story_heights, wall_thickness, density
 
     n = numel(story_heights); % updated number of floors
 
-    % --- validate geom struct and expand geometry vectors ---
+    % Validate geometry struct and expand scalar entries to vectors
     if ~isstruct(geom)
         error('geom must be a struct with fields wall_width, slab_thickness, internal_fraction (optional: floor_area, perimeter).');
     end
@@ -80,7 +59,6 @@ function building = create_building(name, story_heights, wall_thickness, density
         error('geom must contain field ''internal_fraction''.');
     end
 
-    % expand slab_thickness
     if isscalar(geom.slab_thickness)
         slab_thickness = geom.slab_thickness * ones(n,1);
     else
@@ -90,7 +68,6 @@ function building = create_building(name, story_heights, wall_thickness, density
         end
     end
 
-    % expand wall_width
     if isscalar(geom.wall_width)
         wall_width = geom.wall_width * ones(n,1);
     else
@@ -100,7 +77,6 @@ function building = create_building(name, story_heights, wall_thickness, density
         end
     end
 
-    % floor_area (optional; assume square plan if not provided)
     if isfield(geom,'floor_area') && ~isempty(geom.floor_area)
         if isscalar(geom.floor_area)
             floor_area = geom.floor_area * ones(n,1);
@@ -114,7 +90,6 @@ function building = create_building(name, story_heights, wall_thickness, density
         floor_area = wall_width .* wall_width; % assume square plan
     end
 
-    % perimeter (optional; default = 4 * wall_width)
     if isfield(geom,'perimeter') && ~isempty(geom.perimeter)
         if isscalar(geom.perimeter)
             perimeter = geom.perimeter * ones(n,1);
@@ -128,7 +103,6 @@ function building = create_building(name, story_heights, wall_thickness, density
         perimeter = 4 .* wall_width;
     end
 
-    % internal fraction (must be scalar in most definitions)
     internal_fraction = geom.internal_fraction;
     if isscalar(internal_fraction)
         internal_fraction = internal_fraction * ones(n,1);
@@ -139,20 +113,15 @@ function building = create_building(name, story_heights, wall_thickness, density
         end
     end
 
-    % --- compute mass and stiffness using helper functions ---
-    % get_m and get_k expect vectors of length n (we already filtered NaNs)
+    % Compute per-floor mass and stiffness
     m = get_m(wall_thickness, density, story_heights, perimeter, floor_area, slab_thickness, internal_fraction);
-
-    % call get_k; if your get_k supports a 5th argument (n_walls) you may pass it here.
     k = get_k(wall_thickness, E, story_heights, wall_width);
 
-    % final checks
     if numel(m) ~= n || numel(k) ~= n
         error('Computed per-floor mass or stiffness length does not match number of valid stories.');
     end
 
-    % --- create Building object ---
-    % verify nonlinear struct has required fields
+    % Verify nonlinear struct has the required fields
     reqNL = {'yield_drift','ultimate_drift','residual_strength','degradation_rate'};
     for ii = 1:numel(reqNL)
         if ~isfield(nonlinear, reqNL{ii})

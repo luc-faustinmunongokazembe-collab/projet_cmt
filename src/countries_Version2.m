@@ -1,24 +1,27 @@
 function countries = countries()
-%COUNTRIES Defines all countries and their building inventories
-%   Uses Option A: floor_area and perimeter are computed from wall_width
+% COUNTRIES Define countries and their inventories of buildings.
+% Each building uses create_building(...) to compute per-floor mass and
+% stiffness and returns a Building object.
+%
+% The function returns an array of Country objects.
 
-    % ---------- ANCIENT JAPAN (wood)----------
-    geom_jp1.wall_width = 10;         % m per floor
-    geom_jp1.slab_thickness = 0.1; % floor-specific slab thickness
-    geom_jp1.internal_fraction = 0.15;          % fraction of walls + slab mass
-    
-    geom_jp2.wall_width = 6;         % m per floor
-    geom_jp2.slab_thickness = geom_jp1.slab_thickness; % floor-specific slab thickness
-    geom_jp2.internal_fraction = geom_jp1.internal_fraction;          % fraction of walls + slab mass
-    
-    geom_jp3.wall_width = 8;         % m per floor
-    geom_jp3.slab_thickness = geom_jp1.slab_thickness; % floor-specific slab thickness
-    geom_jp3.internal_fraction = geom_jp1.internal_fraction;          % fraction of walls + slab mass
-    
-    geom_jp4.wall_width = 2.5;         % m per floor
-    geom_jp4.slab_thickness = geom_jp1.slab_thickness; % floor-specific slab thickness
-    geom_jp4.internal_fraction = geom_jp1.internal_fraction;          % fraction of walls + slab mass
-    
+    % ---------- ANCIENT JAPAN (wood) ----------
+    geom_jp1.wall_width = 10;
+    geom_jp1.slab_thickness = 0.1;
+    geom_jp1.internal_fraction = 0.15;
+
+    geom_jp2.wall_width = 6;
+    geom_jp2.slab_thickness = geom_jp1.slab_thickness;
+    geom_jp2.internal_fraction = geom_jp1.internal_fraction;
+
+    geom_jp3.wall_width = 8;
+    geom_jp3.slab_thickness = geom_jp1.slab_thickness;
+    geom_jp3.internal_fraction = geom_jp1.internal_fraction;
+
+    geom_jp4.wall_width = 2.5;
+    geom_jp4.slab_thickness = geom_jp1.slab_thickness;
+    geom_jp4.internal_fraction = geom_jp1.internal_fraction;
+
     thickness_jp = .15;
 
     nl_jp.yield_drift = 0.005;
@@ -30,32 +33,29 @@ function countries = countries()
     rho_jp = 500;
 
     building_jp1 = create_building('JP_Building_1',[3;3;2.8;2.8], thickness_jp * ones(4,1), rho_jp, E_jp, geom_jp1, nl_jp);
-
     building_jp2 = create_building('JP_Building_2',[3;3], thickness_jp * ones(2,1), rho_jp, E_jp, geom_jp2, nl_jp);
-
     building_jp3 = create_building('JP_Building_3',[3;2.8;2.8], thickness_jp * ones(3,1), rho_jp, E_jp, geom_jp3, nl_jp);
-
     building_jp4 = create_building('JP_Building_4',[1.7;1.5], thickness_jp * ones(2,1), rho_jp, E_jp, geom_jp4, nl_jp);
 
     japan = Country('Ancient Japan', [building_jp1, building_jp2,building_jp3,building_jp4]);
 
-    % ---------- ANCIENT GREECE (stone)----------
-    geom_gr1.wall_width = 8;                 % m per floor
-    geom_gr1.slab_thickness = 0.2;       % floor-specific
+    % ---------- ANCIENT GREECE (stone) ----------
+    geom_gr1.wall_width = 8;
+    geom_gr1.slab_thickness = 0.2;
     geom_gr1.internal_fraction = 0.05;
 
-    geom_gr2.wall_width = 9;                 % m per floor
-    geom_gr2.slab_thickness = 0.2;       % floor-specific
+    geom_gr2.wall_width = 9;
+    geom_gr2.slab_thickness = 0.2;
     geom_gr2.internal_fraction = 0.05;
 
-    geom_gr3.wall_width = 15;                 % m per floor
-    geom_gr3.slab_thickness = 0.2;       % floor-specific
+    geom_gr3.wall_width = 15;
+    geom_gr3.slab_thickness = 0.2;
     geom_gr3.internal_fraction = 0.05;
 
-    geom_gr4.wall_width = 7;                 % m per floor
-    geom_gr4.slab_thickness = 0.2;       % floor-specific
+    geom_gr4.wall_width = 7;
+    geom_gr4.slab_thickness = 0.2;
     geom_gr4.internal_fraction = 0.05;
-    
+
     thickness_gr1 = .6;
     thickness_gr3 = .8;
     thickness_gr4 = .7;
@@ -76,22 +76,22 @@ function countries = countries()
     greece = Country('Ancient Greece', [building_gr1, building_gr2, building_gr3,building_gr4]);
     
     % ---------- USA (Reinforced Concrete) ----------
-    geom_us1.wall_width = 15;                 % m per floor
-    geom_us1.slab_thickness = 0.18;       % floor-specific
+    geom_us1.wall_width = 15;
+    geom_us1.slab_thickness = 0.18;
     geom_us1.internal_fraction = 0.3;
 
-    geom_us2.wall_width = 15;                 % m per floor
-    geom_us2.slab_thickness = 0.18;       % floor-specific
+    geom_us2.wall_width = 15;
+    geom_us2.slab_thickness = 0.18;
     geom_us2.internal_fraction = 0.3;
 
-    geom_us3.wall_width = 18;                 % m per floor
-    geom_us3.slab_thickness = 0.18;       % floor-specific
+    geom_us3.wall_width = 18;
+    geom_us3.slab_thickness = 0.18;
     geom_us3.internal_fraction = 0.3;
 
-    geom_us4.wall_width = 12;                 % m per floor
-    geom_us4.slab_thickness = 0.18;       % floor-specific
+    geom_us4.wall_width = 12;
+    geom_us4.slab_thickness = 0.18;
     geom_us4.internal_fraction = 0.3;
-    
+
     thickness_us = .2;
 
     nl_us.yield_drift = 0.004;
@@ -108,8 +108,6 @@ function countries = countries()
     building_us4 = create_building('US_Building_4',[4;4], thickness_us * ones(2,1), rho_us, E_us, geom_us4, nl_us);
 
     usa = Country('USA', [building_us1, building_us2, building_us3,building_us4]);
-
-
 
     % ---------- Output list ----------
     countries = [japan, greece,usa];
